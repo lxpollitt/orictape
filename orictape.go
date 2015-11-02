@@ -91,7 +91,7 @@ func main() {
 
 	fmt.Println("\n**done**")
 
-	displayUI(programs[1])
+	displayUI(programs[0])
 
 }
 

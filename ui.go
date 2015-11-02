@@ -20,7 +20,6 @@ func tbHLine(y int, fg, bg termbox.Attribute) {
 	}
 }
 
-var current string
 var prog program
 
 func mouse_button_num(k termbox.Key) int {
@@ -44,8 +43,8 @@ const curCol = termbox.ColorCyan
 //const fgCol = termbox.ColorWhite
 
 var currentHeight, currentWidth int
-var hexWidth, hexHeight, hexCols int
-var basicWidth, basicHeight int
+var hexY, hexHeight, hexCols int
+var basicY, basicHeight int
 var mainHeight int
 
 func resetSize(w, h int) {
@@ -53,37 +52,37 @@ func resetSize(w, h int) {
 	mainHeight = h - 1
 
 	hexCols = w / 3
-	hexWidth = hexCols*3 + 1
+	hexY = 0
 	hexHeight = h / 2
 
-	basicWidth = w
-	basicHeight = mainHeight - hexHeight - 1
+	basicY = hexHeight + 1
+	basicHeight = mainHeight - basicY
 
 	termbox.Clear(fgCol, bgCol)
 	tbPrint(0, mainHeight, termbox.ColorWhite, termbox.ColorBlue, "Instructions go here....  Press Esc to quit")
-	tbHLine(hexHeight, fgCol, bgCol)
+	tbHLine(basicY-1, fgCol, bgCol)
 }
 
 var hexStart, hexEnd int
 
 func redrawHex() {
 	i := hexStart
-	for h := 0; h < hexHeight && i < len(prog.bytes); h++ {
-		for w := 0; w < hexCols; w++ {
+	for row := 0; row < hexHeight && i < len(prog.bytes); row++ {
+		for col := 0; col < hexCols; col++ {
 			if i < len(prog.bytes) {
 				bti := prog.bytes[i]
 				v := fmt.Sprintf("%02x", bti.v)
 				switch {
 				case bti.chkErr:
-					tbPrint(w*3+1, h, termbox.ColorRed, bgCol, v)
+					tbPrint(col*3+1, hexY+row, termbox.ColorRed, bgCol, v)
 				case bti.unclear:
-					tbPrint(w*3+1, h, termbox.ColorYellow, bgCol, v)
+					tbPrint(col*3+1, hexY+row, termbox.ColorYellow, bgCol, v)
 				default:
-					tbPrint(w*3+1, h, fgCol, bgCol, v)
+					tbPrint(col*3+1, hexY+row, fgCol, bgCol, v)
 				}
 				i++
 			} else {
-				tbPrint(w*3+1, h, fgCol, bgCol, "  ")
+				tbPrint(col*3+1, hexY+row, fgCol, bgCol, "  ")
 			}
 
 		}
@@ -115,8 +114,8 @@ func redrawSelection(visible bool) {
 		ec := sc + (eh - sh + 1) - (er-sr)*hexCols
 
 		// Calc the start and end cell indexes.
-		si := sc*3 + sr*currentWidth
-		ei := min(ec*3, currentWidth-1) + er*currentWidth
+		si := sc*3 + (hexY+sr)*currentWidth
+		ei := min(ec*3, currentWidth-1) + (hexY+er)*currentWidth
 
 		for i := si; i <= ei; i++ {
 			cells[i].Bg = bg
@@ -132,7 +131,7 @@ func redrawSelection(visible bool) {
 		ch := hexCursor - hexStart
 		cr := ch / hexCols
 		cc := (ch % hexCols)
-		ci := cc*3 + cr*currentWidth
+		ci := cc*3 + (hexY+cr)*currentWidth
 		cells[ci+1].Bg = bg
 		cells[ci+2].Bg = bg
 	}
@@ -141,7 +140,7 @@ func redrawSelection(visible bool) {
 		if visible {
 			bg = selCol
 		}
-		si := ((basicSel - basicStart) + hexHeight + 1) * currentWidth
+		si := ((basicSel - basicStart) + basicY) * currentWidth
 		ei := si + currentWidth
 		for i := si; i < ei; i++ {
 			cells[i].Bg = bg
@@ -153,8 +152,15 @@ var basicStart int
 
 func redrawBasic() {
 	i := basicStart
-	for h := 0; h < basicHeight && i < len(prog.lines); h++ {
-		tbPrint(1, h+hexHeight+1, fgCol, bgCol, prog.lines[i].v)
+	for row := 0; row < basicHeight && i < len(prog.lines); row++ {
+		v := prog.lines[basicStart+row].v
+		for col := 0; col < currentWidth-1; col++ {
+			if col < len(v) {
+				termbox.SetCell(col, row+basicY, rune(v[col]), fgCol, bgCol)
+			} else {
+				termbox.SetCell(col, row+basicY, ' ', fgCol, bgCol)
+			}
+		}
 		i++
 	}
 }
@@ -196,29 +202,40 @@ func moveHexCursor(newHexCur int) {
 		}
 
 		for hexCursor > hexSelEnd {
-			basicSel++
-			if basicSel < len(prog.lines) {
-				hexSelStart = prog.lines[basicSel].firstByte
-				hexSelEnd = prog.lines[basicSel].lastByte
-			} else {
-				hexSelStart = prog.lines[len(prog.lines)-1].lastByte + 1
-				hexSelEnd = len(prog.bytes) - 1
-			}
+			moveBasicCursor(basicSel + 1)
 		}
 
 		for hexCursor < hexSelStart {
-			basicSel--
-			if basicSel >= 0 {
-				hexSelStart = prog.lines[basicSel].firstByte
-				hexSelEnd = prog.lines[basicSel].lastByte
-			} else {
-				hexSelStart = 0
-				hexSelEnd = prog.lines[0].firstByte - 1
-			}
+			moveBasicCursor(basicSel - 1)
 		}
 
 		redrawSelection(true)
 		termbox.Flush()
+	}
+}
+
+func moveBasicCursor(newBasicCur int) {
+	if newBasicCur >= -1 && newBasicCur <= len(prog.lines) {
+		basicSel = newBasicCur
+		if basicSel < 0 {
+			hexSelStart = 0
+			hexSelEnd = prog.lines[0].firstByte - 1
+		} else if basicSel >= len(prog.lines) {
+			hexSelStart = prog.lines[len(prog.lines)-1].lastByte + 1
+			hexSelEnd = len(prog.bytes) - 1
+		} else {
+			hexSelStart = prog.lines[basicSel].firstByte
+			hexSelEnd = prog.lines[basicSel].lastByte
+		}
+
+		if basicSel > basicStart+basicHeight-2 {
+			basicStart = min(basicSel-basicHeight+2, len(prog.lines)-basicHeight)
+			redrawBasic()
+		} else if basicSel < basicStart {
+			basicStart = max(basicSel-1, 0)
+			redrawBasic()
+		}
+
 	}
 }
 
