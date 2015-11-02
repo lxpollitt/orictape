@@ -226,6 +226,7 @@ func displayUI(p program) {
 	err := termbox.Init()
 	if err != nil {
 		fmt.Printf("%s**** %s ****%s", CLR_R, err, CLR_0)
+		return
 	}
 	defer termbox.Close()
 	termbox.SetInputMode(termbox.InputEsc | termbox.InputMouse)
