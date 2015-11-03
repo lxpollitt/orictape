@@ -26,19 +26,23 @@ type byteInfo struct {
 
 type lineInfo struct {
 	v                   string
+	elements            []string
 	firstByte, lastByte int
+	expectedLastByte    int
+	lenErr              bool
 }
 
 type program struct {
-	bytes  []byteInfo
 	stream bitStream
+	bytes  []byteInfo
 	lines  []lineInfo
+	name   string
 }
 
 const (
 	ShortThreshold    int = 20
 	LongThreshold     int = 24
-	NoSignalThreshold     = 46
+	NoSignalThreshold int = 46
 )
 
 const CLR_0 = "\x1b[30;1m"
@@ -82,17 +86,19 @@ func main() {
 	fmt.Printf("Read %d programs\n", len(programs))
 
 	for _, prog := range programs {
-		fmt.Println(len(prog.lines))
-
+		fmt.Printf("[%s]\n", prog.name)
 		for _, line := range prog.lines {
-			fmt.Println(line.v)
+			if line.lenErr {
+				fmt.Printf("%d %d %s%s%s\n", line.expectedLastByte-line.lastByte, line.lastByte-line.firstByte+1, CLR_R, line.v, CLR_0)
+			} else {
+				fmt.Println(line.v)
+			}
 		}
 	}
 
 	fmt.Println("\n**done**")
 
 	displayUI(programs[0])
-
 }
 
 func min(a, b int) int {
@@ -307,7 +313,6 @@ func readPrograms(streams []bitStream) (programs []program) {
 		prog := readProgramBytes(stream)
 		if len(prog.bytes) > 0 {
 			readProgramLines(&prog)
-			fmt.Println(len(prog.lines))
 
 			programs = append(programs, prog)
 
@@ -377,13 +382,28 @@ findSync:
 	// Strip the program name.
 	fmt.Printf("%sLoading ", CLR_G)
 	for b = getByte(); b > 0; b = getByte() {
-		fmt.Printf("%s", string(b))
+		prog.name = prog.name + string(b)
 	}
-	fmt.Printf("%s\n", CLR_0)
+	fmt.Printf("%s%s\n", prog.name, CLR_0)
 
-	for uint(getByte())+uint(getByte()) > 0 {
-		lineStart = nextByte - 2
-		line := fmt.Sprintf("%d ", uint(getByte())+256*uint(getByte()))
+	// Read the program lines.
+	correctionOffset := 0
+	for {
+		lineStart = nextByte
+		nextLineStart := int(uint(getByte()) + 256*uint(getByte()))
+		if nextLineStart == 0 {
+			// Reached end of program.
+			break
+		}
+		nextLineStart = nextLineStart - correctionOffset
+
+		elements := make([]string, 0, 40)
+
+		// Get the line number.
+		element := fmt.Sprintf("%d ", uint(getByte())+256*uint(getByte()))
+		elements = append(elements, element)
+		line := element
+
 	readLine:
 		for {
 			b = getByte()
@@ -391,15 +411,32 @@ findSync:
 			case b == 0:
 				break readLine
 			case b < 128:
-				line = line + string(b)
+				element = string(b)
 			case int(b-byte(128)) < len(keywords):
-				line = line + keywords[b-128]
+				element = keywords[b-128]
 			default:
-				line = line + CLR_R + "?" + CLR_0
+				element = CLR_R + "[UNKOWN_KEYWORD]" + CLR_0
 			}
+			elements = append(elements, element)
+			line = line + element
 		}
-		prog.lines = append(prog.lines, lineInfo{v: line, firstByte: lineStart, lastByte: nextByte - 1})
+		prog.lines = append(prog.lines,
+			lineInfo{v: line,
+				elements:  elements,
+				firstByte: lineStart, lastByte: nextByte - 1,
+				expectedLastByte: nextLineStart - 1,
+				lenErr:           nextLineStart != nextByte})
+		correctionOffset = correctionOffset + nextLineStart - nextByte
+		fmt.Println(len(elements))
 	}
+
+	// We can't deduce line length error for the first line because we didn't yet know the offset.
+	// So fix that up now.
+	if len(prog.lines) > 0 {
+		prog.lines[0].lenErr = false
+		prog.lines[0].expectedLastByte = prog.lines[0].lastByte
+	}
+
 	fmt.Println(len(prog.lines))
 }
 
