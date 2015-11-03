@@ -58,8 +58,9 @@ func resetSize(w, h int) {
 	basicY = hexHeight + 1
 	basicHeight = mainHeight - basicY
 
+	statusY = mainHeight
+
 	termbox.Clear(fgCol, bgCol)
-	tbPrint(0, mainHeight, termbox.ColorWhite, termbox.ColorBlue, "Instructions go here....  Press Esc to quit")
 	tbHLine(basicY-1, fgCol, bgCol)
 }
 
@@ -92,7 +93,8 @@ func redrawHex() {
 
 var hexSelStart, hexSelEnd int = 0, 20
 var hexCursor = 10
-var basicSel int = -1
+var basicCursorLine int = -1
+var basicCursorL, basicCursorR = 0, 10
 
 func redrawSelection(visible bool) {
 	cells := termbox.CellBuffer()
@@ -136,14 +138,23 @@ func redrawSelection(visible bool) {
 		cells[ci+2].Bg = bg
 	}
 
-	if basicSel >= basicStart && basicSel < basicStart+basicHeight {
+	if basicCursorLine >= basicStart && basicCursorLine < basicStart+basicHeight {
 		if visible {
 			bg = selCol
 		}
-		si := ((basicSel - basicStart) + basicY) * currentWidth
+		si := ((basicCursorLine - basicStart) + basicY) * currentWidth
 		ei := si + currentWidth
 		for i := si; i < ei; i++ {
 			cells[i].Bg = bg
+		}
+
+		if basicCursorL <= basicCursorR {
+			if visible {
+				bg = curCol
+			}
+			for i := si + basicCursorL; i <= si+basicCursorR; i++ {
+				cells[i].Bg = bg
+			}
 		}
 	}
 }
@@ -153,15 +164,50 @@ var basicStart int
 func redrawBasic() {
 	i := basicStart
 	for row := 0; row < basicHeight && i < len(prog.lines); row++ {
-		v := prog.lines[basicStart+row].v
+		l := prog.lines[basicStart+row]
+		v := l.v
+		fg := fgCol
+		if l.lenErr {
+			fg = termbox.ColorRed
+		}
 		for col := 0; col < currentWidth-1; col++ {
 			if col < len(v) {
-				termbox.SetCell(col, row+basicY, rune(v[col]), fgCol, bgCol)
+				termbox.SetCell(1+col, row+basicY, rune(v[col]), fg, bgCol)
 			} else {
-				termbox.SetCell(col, row+basicY, ' ', fgCol, bgCol)
+				termbox.SetCell(1+col, row+basicY, ' ', fg, bgCol)
 			}
 		}
 		i++
+	}
+}
+
+var statusY int
+var hexErrStatus string
+var hexWarnStatus string
+var basicErrStatus string
+
+func redrawStatus() {
+	var status string
+	var bg termbox.Attribute
+	switch {
+	case hexErrStatus != "" || basicErrStatus != "":
+		bg = termbox.ColorRed
+		status = fmt.Sprintf(" %s %s %s", hexWarnStatus, hexErrStatus, basicErrStatus)
+	case hexWarnStatus != "":
+		bg = termbox.ColorYellow
+		status = fmt.Sprintf(" %s", hexWarnStatus)
+	default:
+		bg = termbox.ColorBlue
+		status = " Instructions go here....  Press Esc to quit"
+	}
+
+	x := 0
+	for _, c := range status {
+		termbox.SetCell(x, statusY, c, termbox.ColorWhite, bg)
+		x++
+	}
+	for ; x < currentWidth; x++ {
+		termbox.SetCell(x, statusY, ' ', termbox.ColorWhite, bg)
 	}
 }
 
@@ -175,6 +221,7 @@ func redrawAll() {
 	redrawHex()
 	redrawBasic()
 	redrawSelection(true)
+	redrawStatus()
 
 	termbox.Flush()
 
@@ -189,6 +236,19 @@ func moveHexCursor(newHexCur int) {
 	if newHexCur >= 0 && newHexCur < len(prog.bytes) {
 		redrawSelection(false)
 		hexCursor = newHexCur
+
+		if prog.bytes[hexCursor].chkErr {
+			hexErrStatus = "Byte checksum error!"
+		} else {
+			hexErrStatus = ""
+		}
+		if prog.bytes[hexCursor].unclear {
+			hexWarnStatus = "Byte unclear!"
+		} else {
+			hexWarnStatus = ""
+		}
+
+		// Scroll so that hex cursor is visible.
 		if hexCursor > hexStart+(hexHeight-2)*hexCols {
 			hexStart = max(0,
 				min((len(prog.bytes)/hexCols-hexHeight+1)*hexCols,
@@ -201,41 +261,75 @@ func moveHexCursor(newHexCur int) {
 			redrawHex()
 		}
 
-		for hexCursor > hexSelEnd {
-			moveBasicCursor(basicSel + 1)
-		}
-
-		for hexCursor < hexSelStart {
-			moveBasicCursor(basicSel - 1)
+		// Update the basic cursor to track new hex cursor location.
+		switch {
+		case hexCursor > hexSelEnd:
+			for hexCursor > hexSelEnd {
+				moveBasicCursor(basicCursorLine + 1)
+			}
+		case hexCursor < hexSelStart:
+			for hexCursor < hexSelStart {
+				moveBasicCursor(basicCursorLine - 1)
+			}
+		default:
+			moveBasicCursor(basicCursorLine)
 		}
 
 		redrawSelection(true)
+		redrawStatus()
 		termbox.Flush()
 	}
 }
 
-func moveBasicCursor(newBasicCur int) {
-	if newBasicCur >= -1 && newBasicCur <= len(prog.lines) {
-		basicSel = newBasicCur
-		if basicSel < 0 {
-			hexSelStart = 0
-			hexSelEnd = prog.lines[0].firstByte - 1
-		} else if basicSel >= len(prog.lines) {
-			hexSelStart = prog.lines[len(prog.lines)-1].lastByte + 1
-			hexSelEnd = len(prog.bytes) - 1
-		} else {
-			hexSelStart = prog.lines[basicSel].firstByte
-			hexSelEnd = prog.lines[basicSel].lastByte
+func moveBasicCursor(newBasicCursLine int) {
+	if newBasicCursLine >= -1 && newBasicCursLine <= len(prog.lines) {
+		if basicCursorLine != newBasicCursLine {
+			// Move basic cursor to correct line and update hex selection.
+			basicCursorLine = newBasicCursLine
+			if basicCursorLine < 0 {
+				hexSelStart = 0
+				hexSelEnd = prog.lines[0].firstByte - 1
+			} else if basicCursorLine >= len(prog.lines) {
+				hexSelStart = prog.lines[len(prog.lines)-1].lastByte + 1
+				hexSelEnd = len(prog.bytes) - 1
+			} else {
+				hexSelStart = prog.lines[basicCursorLine].firstByte
+				hexSelEnd = prog.lines[basicCursorLine].lastByte
+			}
+
+			// Scroll so basic cursor is visible.
+			if basicCursorLine > basicStart+basicHeight-2 {
+				basicStart = min(basicCursorLine-basicHeight+2, len(prog.lines)-basicHeight)
+				redrawBasic()
+			} else if basicCursorLine < basicStart {
+				basicStart = max(basicCursorLine-1, 0)
+				redrawBasic()
+			}
 		}
 
-		if basicSel > basicStart+basicHeight-2 {
-			basicStart = min(basicSel-basicHeight+2, len(prog.lines)-basicHeight)
-			redrawBasic()
-		} else if basicSel < basicStart {
-			basicStart = max(basicSel-1, 0)
-			redrawBasic()
+		// Move basic cursor to correct element based hex cursor location.
+		if basicCursorLine >= 0 && basicCursorLine < len(prog.lines) {
+			hc := hexCursor - hexSelStart
+			l := prog.lines[basicCursorLine]
+			switch {
+			case hc == 0, hc == 1:
+				basicCursorL = 0
+				basicCursorR = 0
+			case hc == 2, hc == 3:
+				basicCursorL = 1
+				basicCursorR = len(l.elements[0]) - 1
+			case hc-3 < len(l.elements):
+				basicCursorL = 1
+				i := 0
+				for ; i < hc-3; i++ {
+					basicCursorL = basicCursorL + len(l.elements[i])
+				}
+				basicCursorR = basicCursorL + len(l.elements[i]) - 1
+			default:
+				basicCursorL = len(l.v) + 1
+				basicCursorR = basicCursorL
+			}
 		}
-
 	}
 }
 
@@ -258,8 +352,8 @@ mainloop:
 	for {
 		switch ev := termbox.PollEvent(); ev.Type {
 		case termbox.EventKey:
-			tbPrint(0, currentHeight-1, fgCol, bgCol,
-				fmt.Sprintf("EventKey: k: %d, c: %c, mod: %d", ev.Key, ev.Ch, ev.Mod))
+			//			tbPrint(0, currentHeight - 1, fgCol, bgCol,
+			//				fmt.Sprintf("EventKey: k: %d, c: %c, mod: %d", ev.Key, ev.Ch, ev.Mod))
 			switch ev.Key {
 			case termbox.KeyEsc:
 				break mainloop
