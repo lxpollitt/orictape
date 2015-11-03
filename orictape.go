@@ -208,14 +208,13 @@ func abs(i int) int {
 func readBitStreams(samples []int16) (streams []bitStream) {
 	startSample := 0
 	for stream, samplesRead := readBitStream(samples, startSample); samplesRead > 0; stream, samplesRead = readBitStream(samples, startSample) {
-		fmt.Println(stream.firstSample, samplesRead, len(stream.bits))
 		streams = append(streams, stream)
 		startSample += samplesRead
 	}
 
 	fmt.Printf("Found %d streams:\n", len(streams))
 	for i, stream := range streams {
-		fmt.Printf(" %d) Starting at %ds found stream of length %ds\n", i, stream.firstSample/44100, (stream.lastSample-stream.firstSample)/44100)
+		fmt.Printf(" %d) Starting at %ds found stream of length %ds (%d bits)\n", i, stream.firstSample/44100, (stream.lastSample-stream.firstSample)/44100, len(stream.bits))
 	}
 	return
 }
@@ -427,7 +426,6 @@ findSync:
 				expectedLastByte: nextLineStart - 1,
 				lenErr:           nextLineStart != nextByte})
 		correctionOffset = correctionOffset + nextLineStart - nextByte
-		fmt.Println(len(elements))
 	}
 
 	// We can't deduce line length error for the first line because we didn't yet know the offset.
@@ -447,6 +445,8 @@ func readProgramBytes(stream bitStream) (prog program) {
 	var byteStart int
 	var currentBit int
 	var byteUnclear bool
+
+	prog.stream = stream
 
 	getBit := func() (bt bit, ok bool) {
 		if currentBit < len(stream.bits) {

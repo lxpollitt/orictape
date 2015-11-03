@@ -43,25 +43,61 @@ const curCol = termbox.ColorCyan
 //const fgCol = termbox.ColorWhite
 
 var currentHeight, currentWidth int
+var binY int
 var hexY, hexHeight, hexCols int
 var basicY, basicHeight int
 var mainHeight int
+var statusY int
 
 func resetSize(w, h int) {
 	currentWidth, currentHeight = w, h
 	mainHeight = h - 1
 
+	binY = 0
+	h = h - 2
+
 	hexCols = w / 3
-	hexY = 0
+	hexY = 2
 	hexHeight = h / 2
 
-	basicY = hexHeight + 1
+	basicY = hexY + hexHeight + 1
 	basicHeight = mainHeight - basicY
 
 	statusY = mainHeight
 
 	termbox.Clear(fgCol, bgCol)
-	tbHLine(basicY-1, fgCol, bgCol)
+	tbHLine(hexY-1, termbox.ColorBlue, bgCol)
+	tbHLine(basicY-1, termbox.ColorBlue, bgCol)
+}
+
+var binStart, binEnd int
+
+func redrawBin() {
+	var fg termbox.Attribute
+	bytei := prog.bytes[hexCursor]
+	x := 1
+	for i := bytei.firstBit; i <= bytei.lastBit; i++ {
+		b := prog.stream.bits[i]
+		if b.unclear {
+			fg = termbox.ColorYellow
+		} else {
+			fg = fgCol
+		}
+		switch {
+		case b.v == 1:
+			termbox.SetCell(x, binY, '1', fg, bgCol)
+		case b.v == 0:
+			termbox.SetCell(x, binY, '0', fg, bgCol)
+		default:
+			// Should never happen:
+			termbox.SetCell(x, binY, '?', termbox.ColorRed, bgCol)
+		}
+		x++
+	}
+	for ; x < currentWidth; x++ {
+		termbox.SetCell(x, binY, ' ', fgCol, bgCol)
+	}
+
 }
 
 var hexStart, hexEnd int
@@ -91,8 +127,81 @@ func redrawHex() {
 	hexEnd = i - 1
 }
 
+var basicStart int
+
+func redrawBasic() {
+	i := basicStart
+	for row := 0; row < basicHeight && i < len(prog.lines); row++ {
+		l := prog.lines[basicStart+row]
+		v := l.v
+		fg := fgCol
+		if l.lenErr {
+			fg = termbox.ColorRed
+		}
+		for col := 0; col < currentWidth-1; col++ {
+			if col < len(v) {
+				termbox.SetCell(1+col, row+basicY, rune(v[col]), fg, bgCol)
+			} else {
+				termbox.SetCell(1+col, row+basicY, ' ', fg, bgCol)
+			}
+		}
+		i++
+	}
+}
+
+var hexErrStatus string
+var hexWarnStatus string
+var basicErrStatus string
+
+func redrawStatus() {
+	var status string
+	var bg termbox.Attribute
+	switch {
+	case hexErrStatus != "" || basicErrStatus != "":
+		bg = termbox.ColorRed
+		status = fmt.Sprintf(" %s %s %s", hexWarnStatus, hexErrStatus, basicErrStatus)
+	case hexWarnStatus != "":
+		bg = termbox.ColorYellow
+		status = fmt.Sprintf(" %s", hexWarnStatus)
+	default:
+		bg = termbox.ColorBlue
+		status = " Instructions go here....  Press Esc to quit"
+	}
+
+	x := 0
+	for _, c := range status {
+		termbox.SetCell(x, statusY, c, termbox.ColorWhite, bg)
+		x++
+	}
+	for ; x < currentWidth; x++ {
+		termbox.SetCell(x, statusY, ' ', termbox.ColorWhite, bg)
+	}
+}
+
+func redrawAll() {
+	termbox.SetOutputMode(termbox.Output256)
+	w, h := termbox.Size()
+	if currentWidth != w || currentHeight != h {
+		resetSize(w, h)
+	}
+
+	redrawBin()
+	redrawHex()
+	redrawBasic()
+	redrawSelection(true)
+	redrawStatus()
+
+	termbox.Flush()
+
+	// Size has sometimes changed already (during the Flush?).
+	w, h = termbox.Size()
+	if currentWidth != w || currentHeight != h {
+		redrawAll()
+	}
+}
+
 var hexSelStart, hexSelEnd int = 0, 20
-var hexCursor = 10
+var hexCursor = 0
 var basicCursorLine int = -1
 var basicCursorL, basicCursorR = 0, 10
 
@@ -159,79 +268,6 @@ func redrawSelection(visible bool) {
 	}
 }
 
-var basicStart int
-
-func redrawBasic() {
-	i := basicStart
-	for row := 0; row < basicHeight && i < len(prog.lines); row++ {
-		l := prog.lines[basicStart+row]
-		v := l.v
-		fg := fgCol
-		if l.lenErr {
-			fg = termbox.ColorRed
-		}
-		for col := 0; col < currentWidth-1; col++ {
-			if col < len(v) {
-				termbox.SetCell(1+col, row+basicY, rune(v[col]), fg, bgCol)
-			} else {
-				termbox.SetCell(1+col, row+basicY, ' ', fg, bgCol)
-			}
-		}
-		i++
-	}
-}
-
-var statusY int
-var hexErrStatus string
-var hexWarnStatus string
-var basicErrStatus string
-
-func redrawStatus() {
-	var status string
-	var bg termbox.Attribute
-	switch {
-	case hexErrStatus != "" || basicErrStatus != "":
-		bg = termbox.ColorRed
-		status = fmt.Sprintf(" %s %s %s", hexWarnStatus, hexErrStatus, basicErrStatus)
-	case hexWarnStatus != "":
-		bg = termbox.ColorYellow
-		status = fmt.Sprintf(" %s", hexWarnStatus)
-	default:
-		bg = termbox.ColorBlue
-		status = " Instructions go here....  Press Esc to quit"
-	}
-
-	x := 0
-	for _, c := range status {
-		termbox.SetCell(x, statusY, c, termbox.ColorWhite, bg)
-		x++
-	}
-	for ; x < currentWidth; x++ {
-		termbox.SetCell(x, statusY, ' ', termbox.ColorWhite, bg)
-	}
-}
-
-func redrawAll() {
-	termbox.SetOutputMode(termbox.Output256)
-	w, h := termbox.Size()
-	if currentWidth != w || currentHeight != h {
-		resetSize(w, h)
-	}
-
-	redrawHex()
-	redrawBasic()
-	redrawSelection(true)
-	redrawStatus()
-
-	termbox.Flush()
-
-	// Size has sometimes changed already (during the Flush?).
-	w, h = termbox.Size()
-	if currentWidth != w || currentHeight != h {
-		redrawAll()
-	}
-}
-
 func moveHexCursor(newHexCur int) {
 	if newHexCur >= 0 && newHexCur < len(prog.bytes) {
 		redrawSelection(false)
@@ -275,6 +311,7 @@ func moveHexCursor(newHexCur int) {
 			moveBasicCursor(basicCursorLine)
 		}
 
+		redrawBin()
 		redrawSelection(true)
 		redrawStatus()
 		termbox.Flush()
