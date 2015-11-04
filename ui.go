@@ -105,12 +105,6 @@ func redrawWav() {
 	yScale := 1 + (int(prog.stream.maxVal)-int(prog.stream.minVal))/(4*wavHeight)
 	xOffset := bits[bytei.firstBit].firstSample
 	xScale := (100 * (bits[bytei.lastBit].lastSample - xOffset + 1)) / (currentWidth - 4)
-	//	tbPrint(0, 4, fgCol, bgCol, fmt.Sprintf("%d %d %d %d %d",
-	//		prog.stream.bits[bytei.firstBit].firstSample,
-	//		prog.stream.bits[bytei.lastBit].lastSample,
-	//		prog.stream.bits[bytei.lastBit].lastSample - prog.stream.bits[bytei.firstBit].firstSample,
-	//		xScale,
-	//		xScale * (currentWidth - 2) / 100))
 
 	fgLabel := fgCol
 	fgWav := fgCol | termbox.AttrBold
@@ -122,13 +116,16 @@ func redrawWav() {
 		j := xOffset + (xScale * x / 100)
 		if j > bt.lastSample {
 			label = bt.v
+			if bt.unclear {
+				fgLabel = termbox.ColorYellow
+			} else {
+				fgLabel = fgCol
+			}
 			i++
 			bt = bits[i]
 			if bt.unclear {
-				fgLabel = termbox.ColorYellow
 				fgWav = termbox.ColorYellow
 			} else {
-				fgLabel = fgCol
 				fgWav = fgCol | termbox.AttrBold
 			}
 		}
