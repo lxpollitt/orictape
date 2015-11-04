@@ -8,14 +8,10 @@ import (
 
 type bit byte
 type bitInfo struct {
-	v       bit
-	l1, l2  int
-	unclear bool
-}
-
-type bitStream struct {
-	bits                    []bitInfo
+	v                       bit
+	l1, l2                  int
 	firstSample, lastSample int
+	unclear                 bool
 }
 
 type byteInfo struct {
@@ -30,6 +26,13 @@ type lineInfo struct {
 	firstByte, lastByte int
 	expectedLastByte    int
 	lenErr              bool
+}
+
+type bitStream struct {
+	bits                    []bitInfo
+	samples                 []int16
+	firstSample, lastSample int
+	minVal, maxVal          int16
 }
 
 type program struct {
@@ -109,7 +112,23 @@ func min(a, b int) int {
 	}
 }
 
+func min16(a, b int16) int16 {
+	if a < b {
+		return a
+	} else {
+		return b
+	}
+}
+
 func max(a, b int) int {
+	if a > b {
+		return a
+	} else {
+		return b
+	}
+}
+
+func max16(a, b int16) int16 {
 	if a > b {
 		return a
 	} else {
@@ -124,86 +143,6 @@ func abs(i int) int {
 		return -i
 	}
 }
-
-//func readPrograms(samples []int16, basic chan byte) {
-//	streams := make(bitStreamsCh)
-//	go readBitStreams(samples, streams)
-//
-//	for stream, ok := <-streams; ok; stream, ok = <-streams {
-//		readProgram(stream, basic)
-//	}
-//	close(basic)
-//}
-
-//func readProgram(stream bitStreamCh, basic chan byte) {
-//	var by byte
-//	var ok bool
-//
-//	bytes := make(chan byte)
-//	go readBytes(stream, bytes)
-//	defer func() {
-//		// Drain any left over data from the byte stream so sender doesn't block.
-//		drainCount := 0
-//		for by = range bytes {
-//			drainCount++
-//		}
-//		if drainCount > 0 {
-//			fmt.Printf("\n%s**** Ignoring %d bytes at end of file ****%s\n", CLR_R, drainCount, CLR_0)
-//		}
-//	}()
-//
-//	syncCount := 0
-//	findSync:
-//	for {
-//		by, ok = <-bytes
-//		switch {
-//		case !ok:
-//			return
-//		case by == 0x16:
-//			syncCount++
-//		case by == 0x24 && syncCount > 3:
-//			break findSync;
-//		default:
-//			syncCount = 0
-//		}
-//	}
-//	fmt.Printf("\n%s**** synchronized ****%s\n", CLR_G, CLR_0)
-//
-//	// Read the file header.
-//	header := make([]byte, 9)
-//	for i := 0; i < len(header); i++ {
-//		header[i] = <-bytes
-//	}
-//	if header[2] != 0 {
-//		fmt.Printf("\n%s**** not a basic file ****%s\n", CLR_R, CLR_0)
-//		return
-//	}
-//
-//	// Strip the program name.
-//	fmt.Printf("%sLoading ", CLR_G)
-//	for by = <-bytes; by > 0; by = <-bytes {
-//		fmt.Printf("%s", string(by))
-//	}
-//	fmt.Printf("%s\n", CLR_0)
-//
-//	for uint(<-bytes) + uint(<-bytes) > 0 {
-//		fmt.Printf("\n%d ", uint(<-bytes) + 256 * uint(<-bytes))
-//		readLine:
-//		for {
-//			by = <-bytes
-//			switch {
-//			case by == 0:
-//				break readLine
-//			case by < 128:
-//				fmt.Printf("%c", by)
-//			case int(by - byte(128)) < len(keywords):
-//				fmt.Printf("%s", keywords[by - 128])
-//			default:
-//				fmt.Printf("%sUNKNOWN_KEYWORD%s", CLR_R, CLR_0)
-//			}
-//		}
-//	}
-//}
 
 func readBitStreams(samples []int16) (streams []bitStream) {
 	startSample := 0
@@ -236,6 +175,7 @@ func readBitStream(samples []int16, startSample int) (stream bitStream, samplesR
 			}
 		}
 		minIndex = maxIndex + 1 + searchWindowIndex
+		stream.minVal = min16(stream.minVal, minVal)
 
 		// Now find the cross over point where we fall below the threshold.
 		threshold = (maxVal + minVal) / 2
@@ -258,6 +198,7 @@ func readBitStream(samples []int16, startSample int) (stream bitStream, samplesR
 			}
 		}
 		maxIndex = minIndex + 1 + searchWindowIndex
+		stream.maxVal = max16(stream.maxVal, maxVal)
 
 		// Now find the cross over point where we fall below the threshold.
 		threshold = (maxVal + minVal) / 2
@@ -275,19 +216,24 @@ func readBitStream(samples []int16, startSample int) (stream bitStream, samplesR
 		case length > NoSignalThreshold:
 			noSignal = true
 		case length >= LongThreshold:
-			stream.bits = append(stream.bits, bitInfo{v: 0, l1: lengthBelow, l2: lengthAbove})
+			stream.bits = append(stream.bits, bitInfo{v: 0, l1: lengthBelow, l2: lengthAbove,
+				firstSample: aboveIndex - length, lastSample: aboveIndex - 1})
 		case length <= ShortThreshold:
-			stream.bits = append(stream.bits, bitInfo{v: 1, l1: lengthBelow, l2: lengthAbove})
+			stream.bits = append(stream.bits, bitInfo{v: 1, l1: lengthBelow, l2: lengthAbove,
+				firstSample: aboveIndex - length, lastSample: aboveIndex - 1})
 		case abs(lengthBelow-lengthAbove) <= (LongThreshold-ShortThreshold)/2:
 			// Unclear long
-			stream.bits = append(stream.bits, bitInfo{v: 0, l1: lengthBelow, l2: lengthAbove, unclear: true})
+			stream.bits = append(stream.bits, bitInfo{v: 0, l1: lengthBelow, l2: lengthAbove, unclear: true,
+				firstSample: aboveIndex - length, lastSample: aboveIndex - 1})
 		default:
 			// Unclear short
-			stream.bits = append(stream.bits, bitInfo{v: 1, l1: lengthBelow, l2: lengthAbove, unclear: true})
+			stream.bits = append(stream.bits, bitInfo{v: 1, l1: lengthBelow, l2: lengthAbove, unclear: true,
+				firstSample: aboveIndex - length, lastSample: aboveIndex - 1})
 		}
 		return noSignal
 	}
 
+	stream.samples = samples
 	// Search for a stream until we find one at least 0.2 seconds long.
 	maxIndex = startSample
 	aboveIndex = startSample
