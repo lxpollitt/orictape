@@ -380,8 +380,6 @@ findSync:
 		prog.lines[0].lenErr = false
 		prog.lines[0].expectedLastByte = prog.lines[0].lastByte
 	}
-
-	fmt.Println(len(prog.lines))
 }
 
 func readProgramBytes(stream bitStream) (prog program) {

@@ -34,70 +34,132 @@ func mouse_button_num(k termbox.Key) int {
 	return 0
 }
 
+var brailleRunesL = [4]rune{'⠁', '⠂', '⠄', '⡀'}
+
+var brailleRunesR = [4]rune{'⠈', '⠐', '⠠', '⢀'}
+
+var brailleRunesLR = [4][4]rune{
+	{'⠉', '⠑', '⠡', '⢁'},
+	{'⠊', '⠒', '⠢', '⢂'},
+	{'⠌', '⠔', '⠤', '⢄'},
+	{'⡈', '⡐', '⡠', '⣀'}}
+
 const bgCol = termbox.ColorDefault
 const fgCol = termbox.ColorDefault
 const selCol = termbox.ColorWhite
 const curCol = termbox.ColorCyan
 
-//const bgCol = termbox.ColorBlack
-//const fgCol = termbox.ColorWhite
-
 var currentHeight, currentWidth int
-var binY int
+var wavY, wavHeight int
 var hexY, hexHeight, hexCols int
 var basicY, basicHeight int
-var mainHeight int
 var statusY int
 
 func resetSize(w, h int) {
 	currentWidth, currentHeight = w, h
-	mainHeight = h - 1
 
-	binY = 0
-	h = h - 2
+	usedHeight := 0
 
+	// Wav
+	wavY = usedHeight
+	wavHeight = 4
+	usedHeight = usedHeight + wavHeight
+
+	// Horizontal
+	usedHeight++
+
+	// Hex
 	hexCols = w / 3
-	hexY = 2
-	hexHeight = h / 2
+	hexY = usedHeight
+	hexHeight = (h - usedHeight - 1) / 2
+	usedHeight = usedHeight + hexHeight
 
-	basicY = hexY + hexHeight + 1
-	basicHeight = mainHeight - basicY
+	// Horizontal
+	usedHeight++
 
-	statusY = mainHeight
+	// Basic
+	basicY = usedHeight
+	basicHeight = h - usedHeight - 1
+	usedHeight = usedHeight + basicHeight
+
+	// Status
+	statusY = usedHeight
+	usedHeight = usedHeight + 1
 
 	termbox.Clear(fgCol, bgCol)
 	tbHLine(hexY-1, termbox.ColorBlue, bgCol)
 	tbHLine(basicY-1, termbox.ColorBlue, bgCol)
 }
 
-var binStart, binEnd int
-
-func redrawBin() {
-	var fg termbox.Attribute
+func redrawWav() {
 	bytei := prog.bytes[hexCursor]
-	x := 1
-	for i := bytei.firstBit; i <= bytei.lastBit; i++ {
-		b := prog.stream.bits[i]
-		if b.unclear {
-			fg = termbox.ColorYellow
-		} else {
-			fg = fgCol
-		}
-		switch {
-		case b.v == 1:
-			termbox.SetCell(x, binY, '1', fg, bgCol)
-		case b.v == 0:
-			termbox.SetCell(x, binY, '0', fg, bgCol)
-		default:
-			// Should never happen:
-			termbox.SetCell(x, binY, '?', termbox.ColorRed, bgCol)
-		}
-		x++
-	}
-	for ; x < currentWidth; x++ {
-		termbox.SetCell(x, binY, ' ', fgCol, bgCol)
+	bits := prog.stream.bits
+	samples := prog.stream.samples
+
+	// Clear existing wav.
+	cells := termbox.CellBuffer()
+	s := wavY * currentWidth
+	e := s + wavHeight*currentWidth
+	for i := s; i < e; i++ {
+		cells[i].Ch = ' '
 	}
 
+	// Draw new wav.
+	yOffset := int(prog.stream.minVal)
+	yScale := 1 + (int(prog.stream.maxVal)-int(prog.stream.minVal))/(4*wavHeight)
+	xOffset := bits[bytei.firstBit].firstSample
+	xScale := (100 * (bits[bytei.lastBit].lastSample - xOffset + 1)) / (currentWidth - 4)
+	//	tbPrint(0, 4, fgCol, bgCol, fmt.Sprintf("%d %d %d %d %d",
+	//		prog.stream.bits[bytei.firstBit].firstSample,
+	//		prog.stream.bits[bytei.lastBit].lastSample,
+	//		prog.stream.bits[bytei.lastBit].lastSample - prog.stream.bits[bytei.firstBit].firstSample,
+	//		xScale,
+	//		xScale * (currentWidth - 2) / 100))
+
+	fgLabel := fgCol
+	fgWav := fgCol | termbox.AttrBold
+	i := bytei.firstBit
+	bt := bits[i]
+	label := bit(255)
+	y := 4*(wavY+wavHeight) - 1
+	for x := 0; x < currentWidth-2; x++ {
+		j := xOffset + (xScale * x / 100)
+		if j > bt.lastSample {
+			label = bt.v
+			i++
+			bt = bits[i]
+			if bt.unclear {
+				fgLabel = termbox.ColorYellow
+				fgWav = termbox.ColorYellow
+			} else {
+				fgLabel = fgCol
+				fgWav = fgCol | termbox.AttrBold
+			}
+		}
+
+		y1 := y - (int(samples[j])-yOffset)/yScale
+		y2 := y - (int(samples[j+xScale/200])-yOffset)/yScale
+		if y1/4 == y2/4 {
+			termbox.SetCell(x+1, y1/4, brailleRunesLR[y1%4][y2%4], fgWav, bgCol)
+		} else {
+			termbox.SetCell(x+1, y1/4, brailleRunesL[y1%4], fgWav, bgCol)
+			termbox.SetCell(x+1, y2/4, brailleRunesR[y2%4], fgWav, bgCol)
+		}
+
+		if label != 255 {
+			switch {
+			case label == 1:
+				termbox.SetCell(x+1, wavY+wavHeight-1, '1', fgLabel, bgCol)
+			case label == 0:
+				termbox.SetCell(x+1, wavY+wavHeight-1, '0', fgLabel, bgCol)
+			default:
+				// Should never happen:
+				termbox.SetCell(x+1, wavY+wavHeight-1, '?', fgLabel, bgCol)
+			}
+			label = 255
+		}
+
+	}
 }
 
 var hexStart, hexEnd int
@@ -185,7 +247,7 @@ func redrawAll() {
 		resetSize(w, h)
 	}
 
-	redrawBin()
+	redrawWav()
 	redrawHex()
 	redrawBasic()
 	redrawSelection(true)
@@ -311,7 +373,7 @@ func moveHexCursor(newHexCur int) {
 			moveBasicCursor(basicCursorLine)
 		}
 
-		redrawBin()
+		redrawWav()
 		redrawSelection(true)
 		redrawStatus()
 		termbox.Flush()
