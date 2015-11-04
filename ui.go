@@ -14,12 +14,6 @@ func tbPrint(x, y int, fg, bg termbox.Attribute, msg string) {
 
 const horizontalLine = '─'
 
-func tbHLine(y int, fg, bg termbox.Attribute) {
-	for x := 0; x < currentWidth; x++ {
-		termbox.SetCell(x, y, horizontalLine, fg, bg)
-	}
-}
-
 var prog program
 
 func mouse_button_num(k termbox.Key) int {
@@ -51,7 +45,9 @@ const curCol = termbox.ColorCyan
 
 var currentHeight, currentWidth int
 var wavY, wavHeight int
+var hexHeaderY int
 var hexY, hexHeight, hexCols int
+var basicHeaderY int
 var basicY, basicHeight int
 var statusY int
 
@@ -65,7 +61,8 @@ func resetSize(w, h int) {
 	wavHeight = 4
 	usedHeight = usedHeight + wavHeight
 
-	// Horizontal
+	// Hex header
+	hexHeaderY = usedHeight
 	usedHeight++
 
 	// Hex
@@ -74,7 +71,8 @@ func resetSize(w, h int) {
 	hexHeight = (h - usedHeight - 1) / 2
 	usedHeight = usedHeight + hexHeight
 
-	// Horizontal
+	// Basic header
+	basicHeaderY = usedHeight
 	usedHeight++
 
 	// Basic
@@ -87,8 +85,6 @@ func resetSize(w, h int) {
 	usedHeight = usedHeight + 1
 
 	termbox.Clear(fgCol, bgCol)
-	tbHLine(hexY-1, termbox.ColorBlue, bgCol)
-	tbHLine(basicY-1, termbox.ColorBlue, bgCol)
 }
 
 func redrawWav() {
@@ -215,28 +211,57 @@ var hexErrStatus string
 var hexWarnStatus string
 var basicErrStatus string
 
-func redrawStatus() {
-	var status string
-	var bg termbox.Attribute
-	switch {
-	case hexErrStatus != "" || basicErrStatus != "":
-		bg = termbox.ColorRed
-		status = fmt.Sprintf(" %s %s %s", hexWarnStatus, hexErrStatus, basicErrStatus)
-	case hexWarnStatus != "":
-		bg = termbox.ColorYellow
-		status = fmt.Sprintf(" %s", hexWarnStatus)
-	default:
-		bg = termbox.ColorBlue
-		status = " Instructions go here....  Press Esc to quit"
-	}
+type headerText struct {
+	fg   termbox.Attribute
+	text string
+}
 
-	x := 0
-	for _, c := range status {
-		termbox.SetCell(x, statusY, c, termbox.ColorWhite, bg)
+func drawHeader(y int, hts ...headerText) {
+	termbox.SetCell(0, y, horizontalLine, termbox.ColorBlue, bgCol)
+	x := 1
+	for _, ht := range hts {
+		for _, c := range ht.text {
+			termbox.SetCell(x, y, c, ht.fg, bgCol)
+			x++
+		}
+		termbox.SetCell(x, y, horizontalLine, termbox.ColorBlue, bgCol)
 		x++
 	}
 	for ; x < currentWidth; x++ {
-		termbox.SetCell(x, statusY, ' ', termbox.ColorWhite, bg)
+		termbox.SetCell(x, y, horizontalLine, termbox.ColorBlue, bgCol)
+	}
+
+}
+
+func redrawHeaders() {
+	switch {
+	case hexErrStatus != "" && hexWarnStatus != "":
+		drawHeader(hexHeaderY, headerText{termbox.ColorYellow, hexWarnStatus}, headerText{termbox.ColorRed, hexErrStatus})
+	case hexErrStatus != "":
+		drawHeader(hexHeaderY, headerText{termbox.ColorRed, hexErrStatus})
+	case hexWarnStatus != "":
+		drawHeader(hexHeaderY, headerText{termbox.ColorYellow, hexWarnStatus})
+	default:
+		drawHeader(hexHeaderY)
+	}
+
+	switch {
+	case basicErrStatus != "":
+		drawHeader(basicHeaderY, headerText{termbox.ColorRed, basicErrStatus})
+	default:
+		drawHeader(basicHeaderY)
+	}
+}
+
+func redrawStatus() {
+	status := " Instructions go here....  Press Esc to quit"
+	x := 0
+	for _, c := range status {
+		termbox.SetCell(x, statusY, c, termbox.ColorWhite, termbox.ColorBlue)
+		x++
+	}
+	for ; x < currentWidth; x++ {
+		termbox.SetCell(x, statusY, ' ', termbox.ColorWhite, termbox.ColorBlue)
 	}
 }
 
@@ -251,6 +276,7 @@ func redrawAll() {
 	redrawHex()
 	redrawBasic()
 	redrawSelection(true)
+	redrawHeaders()
 	redrawStatus()
 
 	termbox.Flush()
@@ -336,12 +362,12 @@ func moveHexCursor(newHexCur int) {
 		hexCursor = newHexCur
 
 		if prog.bytes[hexCursor].chkErr {
-			hexErrStatus = "Byte checksum error!"
+			hexErrStatus = "Byte checksum error"
 		} else {
 			hexErrStatus = ""
 		}
 		if prog.bytes[hexCursor].unclear {
-			hexWarnStatus = "Byte unclear!"
+			hexWarnStatus = "Byte unclear"
 		} else {
 			hexWarnStatus = ""
 		}
@@ -375,12 +401,14 @@ func moveHexCursor(newHexCur int) {
 
 		redrawWav()
 		redrawSelection(true)
+		redrawHeaders()
 		redrawStatus()
 		termbox.Flush()
 	}
 }
 
 func moveBasicCursor(newBasicCursLine int) {
+	var line lineInfo
 	if newBasicCursLine >= -1 && newBasicCursLine <= len(prog.lines) {
 		if basicCursorLine != newBasicCursLine {
 			// Move basic cursor to correct line and update hex selection.
@@ -392,8 +420,9 @@ func moveBasicCursor(newBasicCursLine int) {
 				hexSelStart = prog.lines[len(prog.lines)-1].lastByte + 1
 				hexSelEnd = len(prog.bytes) - 1
 			} else {
-				hexSelStart = prog.lines[basicCursorLine].firstByte
-				hexSelEnd = prog.lines[basicCursorLine].lastByte
+				line = prog.lines[basicCursorLine]
+				hexSelStart = line.firstByte
+				hexSelEnd = line.lastByte
 			}
 
 			// Scroll so basic cursor is visible.
@@ -404,6 +433,16 @@ func moveBasicCursor(newBasicCursLine int) {
 				basicStart = max(basicCursorLine-1, 0)
 				redrawBasic()
 			}
+
+			// Update the basic header status.
+			if line.lenErr {
+				basicErrStatus = fmt.Sprintf("Line length error (expected %d bytes, found %d bytes)",
+					line.expectedLastByte-line.firstByte+1,
+					line.lastByte-line.firstByte+1)
+			} else {
+				basicErrStatus = ""
+			}
+
 		}
 
 		// Move basic cursor to correct element based hex cursor location.
